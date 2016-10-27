@@ -195,6 +195,8 @@ class Seeker(threading.Thread):
                 self.searchfile(self.filequeue.get(timeout=0.1))
             except Queue.Empty:
                 pass
+            except IOError:  # Ignores the file if it is unavailable.
+                pass
         self.done = True
 
     def searchfile(self,file):
