@@ -47,7 +47,14 @@ def main():
         infile = args.infile
 
     with open(infile,'r') as f:
-        searchrules = [l.strip() for l in f]
+        searchrules = [l.strip() for l in f if l[:3] != '#- ']
+		
+	for rule in searchrules:
+		try:
+			re.compile(rule)
+		except re.error:
+			print('[!] Invalid regex found: %s'%rule)
+			sys.exit(0)
 
     for rule in searchrules:
         resultdict[rule] = []
@@ -103,39 +110,45 @@ def start():
         files = findfiles(tosearch)
     else:
         files = [tosearch]
-
-    print('[*] Files to check: %s'%len(files))
+		
+    if len(files) == 0:
+        print('[!] No files found, exiting...')
+        return
+		
+    print('[*] Files to check: %s\n'%len(files))
 
     progresstracker = Progress(len(files),len(searchrules))
     progresstracker.start()
 
     filequeue = Queue.Queue()
     resqueue = Queue.Queue()
+    failqueue = Queue.Queue()
 
     for f in files:
         filequeue.put(f)
 
     lock = threading.Lock()
     for i in range(numthreads):
-        threads.append(Seeker(filequeue,resqueue,searchrules,progresstracker,lock,i))
+        threads.append(Seeker(filequeue,resqueue,failqueue,searchrules,progresstracker,lock,i))
         threads[i].start()
 
-    while not arethreadsdone(threads):
-        pass
+	[t.join() for t in threads]	
+	progresstracker.done = True
+	progresstracker.join()
+
+    if not failqueue.empty():
+        print('[!] Unable to open the following files:')
+        while not failqueue.empty():
+            print('\t%s'%failqueue.get())
+        print('')
 
     while not resqueue.empty():
         newdict = resqueue.get()
         for k,v in newdict.iteritems():
             resultdict[k].extend(v)
 
-    progresstracker.done = True
     dumpresults()
-    
-def arethreadsdone(threads):
-    for t in threads:
-        if t.done == False:
-            return False
-    return True
+    print('Results saved to: %s'%outfile)
 
 def linecount(files):
     count = 0
@@ -175,10 +188,11 @@ def dumpresults():
                 f.write('%s\n'%value)
 
 class Seeker(threading.Thread):
-    def __init__(self,filequeue,resqueue,searchrules,progresstracker,lock,id):
+    def __init__(self,filequeue,resqueue,failqueue,searchrules,progresstracker,lock,id):
         threading.Thread.__init__(self)
         self.filequeue = filequeue
         self.resqueue = resqueue
+        self.failqueue = failqueue
         self.searchrules = copy.deepcopy(searchrules) #not entirely sure if this is required, but just in case...
         self.progresstracker = progresstracker
         self.lock = lock
@@ -202,24 +216,33 @@ class Seeker(threading.Thread):
     def searchfile(self,file):
         self.cleardict()
 
-        with open(file) as f:
-            for rule in self.searchrules:
-                self.linenum = 1
-                f.seek(0)
-                prog = re.compile(rule)
-                for l in f:
-                    if prog.search(l):
-                        #formatting done for csv rfc purposes
-                        self.resultdict[rule].append('"%s","%s","%s"'%(file.replace('"','""'),self.linenum,l.strip().replace('"','""')))
-                    self.linenum += 1
-                self.lock.acquire()
-                self.progresstracker.checksdone += 1
-                self.lock.release()
-        self.resqueue.put(copy.deepcopy(self.resultdict)) #deep copy to make sure we don't have threads messing with multiple refs to the same dict
+        try:
+            with open(file) as f:
+                for rule in self.searchrules:
+                    self.linenum = 1
+                    f.seek(0)
+                    prog = re.compile(rule, flags=re.IGNORECASE)
+                    for l in f:
+                        if prog.search(l):
+                            #formatting done for csv rfc purposes
+                            self.resultdict[rule].append('"%s","%s","%s"'%(file.replace('"','""'),self.linenum,l.strip().replace('"','""')))
+                        self.linenum += 1
+                    self.lock.acquire()
+                    self.progresstracker.checksdone += 1
+                    self.lock.release()
+            self.resqueue.put(copy.deepcopy(self.resultdict)) #deep copy to make sure we don't have threads messing with multiple refs to the same dict
+        except IOError:
+            self.lock.acquire()
+            self.progresstracker.checksdone += len(self.searchrules)
+            self.lock.release()
+            self.failqueue.put(file)
 
     def cleardict(self):
         for k,v in self.resultdict.iteritems():
             self.resultdict[k] = []
+			
+    def __repr__(self):
+        print('<ID: %s>'%self.id)
 
 class Progress(threading.Thread):
     def __init__(self,numfiles,numrules):
