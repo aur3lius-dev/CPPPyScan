@@ -4,18 +4,22 @@ from os import walk, path
 from operator import itemgetter
 import sys, getopt, re, argparse, threading, Queue, copy
 
-parser = argparse.ArgumentParser(description='Do stuff with files.', prog='cpppyscan.py', usage='%(prog)s [-h, -r, -v, -z, -e <extension(s)>, -i <filename>, -o <filename>] -d|-f <directory|filename>', \
+parser = argparse.ArgumentParser(description='Do stuff with files.', prog='cpppyscan.py',
+                                 usage=('%(prog)s [-h, -r, -v, -z, -e <extension(s)>, -i <filename>,' +
+                                        ' -o <filename>] -d|-f <directory|filename>'), \
     formatter_class=lambda prog: argparse.HelpFormatter(prog,max_help_position=65, width =150))
 group = parser.add_mutually_exclusive_group(required=True)
 parser.add_argument("-i", "--infile", default="rules.txt", action='store_true', help="File for all regex rules. Default is 'rules.txt'")
 parser.add_argument("-r", "--recursive", action='store_false', help="Do not recursively search all files in the given directory")
 parser.add_argument("-v", "--verbose", action='store_true', help="Turn on (extremely) verbose mode")
 parser.add_argument("-e", "--extension", nargs='?', default=None, help="filetype(s) to restrict search to. seperate lists via commas with no spaces")
-parser.add_argument("-o", "--outfile", default="results.csv", nargs='?', help="specify output file. Default is 'results.csv'. NOTE: will overwrite file if it currently exists")
+parser.add_argument("-o", "--outfile", default="results.csv", nargs='?',
+                    help="specify output file. Default is 'results.csv'. NOTE: will overwrite file if it currently exists")
 group.add_argument("-d", "--directory", default=None, help="directory to search")
 group.add_argument("-f", "--file", default=None, help="file to search")
 parser.add_argument("-t", "--threads", default=5)
 parser.add_argument("-z", "--disableerrorhandling", action='store_true', help="disable error handling to see full stack traces on errors")
+parser.add_argument("-b", "--ignfilt", nargs="?", default=None, help="filetypes to ignore during search")
 args = parser.parse_args()
 
 tosearch = None
@@ -41,13 +45,13 @@ def vprint(str):
         print(str)
 
 def main():
-    global outfile,infile,tosearch,targettype,searchrules,extfilter,verbose,recursive,errorhandling,recursive,resultdict,numthreads,threads
+    global outfile,infile,tosearch,targettype,searchrules,extfilter,verbose,recursive,errorhandling,recursive,resultdict,numthreads,threads,blacklist
 
     if args.infile:
         infile = args.infile
 
     with open(infile,'r') as f:
-        searchrules = [l.strip() for l in f if l[:3] != '#- ']
+        searchrules = [l.strip() for l in f if l[:1] != '#']
 		
 	for rule in searchrules:
 		try:
@@ -76,9 +80,17 @@ def main():
         extfilter = args.extension.split(',')
         for i,e in enumerate(extfilter):
             if e[0] == '.':
-                extfilter[i] = e[1:]
+                extfilter[i] = e[1:]   
     except:
         extfilter = []
+    try:
+        blacklist = args.ignfilt.split(",")
+        for i,e in enumerate(blacklist):
+            if e[0] == ".":
+                blacklist[i] = e[1:]
+    except:
+        blacklist = []
+        
 
     recursive = args.recursive
     verbose = args.verbose
@@ -167,11 +179,17 @@ def findfiles(dir):
         if not recursive:
             break
 
-    if len(extfilter) > 0:
+    if len(extfilter) > 0 or len(blacklist) > 0:
         flist2 = []
         for f in flist:
-            if f.split('.')[-1] in extfilter:
-                flist2.append(f)
+            ext = f.split('.')[-1]
+            if ext not in blacklist:
+                if len(extfilter) > 0:
+                    if ext in extfilter:
+                        flist2.append(f)
+                else:
+                    flist2.append(f)
+            
 
     try:
         return flist2
